@@ -391,44 +391,4 @@ with c1:
 
 with c2:
     st.markdown("**Import attendance CSV**")
-    up = st.file_uploader("Upload (columns: Timestamp, ServiceDate, ServiceName, Attendee, Household, Notes)",
-                          type=["csv"], key="up_att")
-    if st.session_state.is_admin and up is not None:
-        try:
-            newdf = pd.read_csv(up)
-            missing = [c for c in ATTENDANCE_COLS if c not in newdf.columns]
-            if missing:
-                st.error(f"CSV must include: {', '.join(ATTENDANCE_COLS)}. Missing: {', '.join(missing)}")
-            else:
-                save_attendance(newdf[ATTENDANCE_COLS].copy())
-                st.success("Imported attendance and saved to Google Sheets.")
-                time.sleep(0.1); st.rerun()
-        except Exception as e:
-            st.error(f"Import failed: {e}")
-
-with c3:
-    st.markdown("**Members roster**")
-    csv_mem = ensure_member_cols(mem).to_csv(index=False).encode("utf-8")
-    st.download_button("Download roster CSV", data=csv_mem,
-                       file_name="members_export.csv", mime="text/csv",
-                       use_container_width=True)
-    upm = st.file_uploader("Import roster CSV (FirstName, LastName, Notes, Active)",
-                           type=["csv"], key="up_mem")
-    if st.session_state.is_admin and upm is not None:
-        try:
-            mdf = pd.read_csv(upm, dtype=str)
-            # Flexible: accept Attendee or First/Last; normalize
-            if "Attendee" in mdf.columns and ("FirstName" not in mdf.columns or "LastName" not in mdf.columns):
-                split = mdf["Attendee"].fillna("").astype(str).str.strip().str.split(" ", n=1, expand=True)
-                mdf["FirstName"] = split[0].fillna("")
-                mdf["LastName"]  = split[1].fillna("")
-            mdf["Active"] = pd.to_numeric(mdf.get("Active", 1), errors="coerce").fillna(1).astype(int)
-            mdf["Notes"]  = mdf.get("Notes", "")
-            mdf = ensure_member_cols(mdf)
-            save_members(mdf)
-            st.success("Roster imported.")
-            time.sleep(0.1); st.rerun()
-        except Exception as e:
-            st.error(f"Roster import failed: {e}")
-
-st.caption("Data is stored in Google Sheets. Tabs: 'attendance' and 'members'. Share the Sheet with your service account as Editor.")
+    up = st.file_uploader("Upload (columns: Timestamp, Service
