@@ -421,4 +421,48 @@ with c3:
         except Exception as e:
             st.error(f"Roster import failed: {e}")
 
+# ===================== ADMIN: DELETE SERVICE RECORDS (SIDEBAR) =====================
+if st.session_state.is_admin and not att.empty:
+    st.sidebar.markdown("---")
+    st.sidebar.header("🗑️ Delete Service Records")
+
+    # Build list of unique services (date + name)
+    service_list = (
+        att[["ServiceDate", "ServiceName"]]
+        .drop_duplicates()
+        .sort_values(["ServiceDate", "ServiceName"])
+    )
+
+    if not service_list.empty:
+        options = [
+            f"{r.ServiceDate} — {r.ServiceName}"
+            for r in service_list.itertuples(index=False)
+        ]
+
+        sel_service = st.sidebar.selectbox(
+            "Select service to delete",
+            ["--"] + options,
+            index=0,
+            help="This will remove ALL rows that match the selected date + service.",
+        )
+
+        confirm = st.sidebar.checkbox(
+            "⚠️ Confirm delete",
+            value=False,
+            key="confirm_del_service"
+        )
+
+        if sel_service != "--" and confirm and st.sidebar.button("Delete selected service"):
+            sdate, sname = sel_service.split(" — ", 1)
+            before = len(att)
+            att = att[
+                ~((att["ServiceDate"] == sdate) & (att["ServiceName"] == sname))
+            ].reset_index(drop=True)
+            save_attendance(att)
+            st.sidebar.success(f"Deleted {before - len(att)} rows for {sdate} — {sname}")
+            time.sleep(0.1)
+            st.rerun()
+    else:
+        st.sidebar.info("No services found to delete.")
+
 st.caption("Data is stored in Google Sheets. Tabs: 'attendance' and 'members'. Share the Sheet with your service account as Editor.")
