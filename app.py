@@ -391,4 +391,115 @@ with c1:
 
 with c2:
     st.markdown("**Import attendance CSV**")
-    up = st.file_uploader("Upload (columns: Timestamp, Service
+    up = st.file_uploader("Upload (columns: Timestamp, ServiceDate, ServiceName, Attendee, Household, Notes)",
+                          type=["csv"], key="up_att")
+   with c2:
+    st.markdown("**Import attendance CSV**")
+    up = st.file_uploader("Upload (columns: Timestamp, ServiceDate, ServiceName, Attendee, Household, Notes)",
+                          type=["csv"], key="up_att")
+           if st.session_state.is_admin and up is not None:
+        try:
+            newdf = pd.read_csv(up)
+            missing = [c for c in ATTENDANCE_COLS if c not in newdf.columns]
+            if missing:
+                st.error(
+                    "CSV must include: "
+                    + ", ".join(ATTENDANCE_COLS)
+                    + ". Missing: "
+                    + ", ".join(missing)
+                )
+            else:
+                save_attendance(newdf[ATTENDANCE_COLS].copy())
+                st.success("Imported attendance and saved to Google Sheets.")
+                time.sleep(0.1)
+                st.rerun()
+        except Exception as e:
+            st.error(f"Import failed: {e}")
+
+with c3:
+    st.markdown("**Members roster**")
+    csv_mem = ensure_member_cols(mem).to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download roster CSV",
+        data=csv_mem,
+        file_name="members_export.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    upm = st.file_uploader(
+        "Import roster CSV (FirstName, LastName, Notes, Active) — or Attendee",
+        type=["csv"],
+        key="up_mem",
+    )
+    if st.session_state.is_admin and upm is not None:
+        try:
+            mdf = pd.read_csv(upm, dtype=str)
+
+            # Flexible: accept Attendee or First/Last; normalize to FirstName/LastName/Attendee
+            if "Attendee" in mdf.columns and (
+                "FirstName" not in mdf.columns or "LastName" not in mdf.columns
+            ):
+                split = (
+                    mdf["Attendee"]
+                    .fillna("")
+                    .astype(str)
+                    .str.strip()
+                    .str.split(" ", n=1, expand=True)
+                )
+                mdf["FirstName"] = split[0].fillna("")
+                mdf["LastName"] = split[1].fillna("")
+
+            mdf["Active"] = (
+                pd.to_numeric(mdf.get("Active", 1), errors="coerce").fillna(1).astype(int)
+            )
+            mdf["Notes"] = mdf.get("Notes", "")
+            mdf = ensure_member_cols(mdf)
+            save_members(mdf)
+            st.success("Roster imported.")
+            time.sleep(0.1)
+            st.rerun()
+        except Exception as e:
+            st.error(f"Roster import failed: {e}")
+
+# ===================== ADMIN: DELETE SERVICE RECORDS (SIDEBAR) =====================
+if st.session_state.is_admin and not att.empty:
+    st.sidebar.markdown("---")
+    st.sidebar.header("🗑️ Delete Service Records")
+
+    service_list = (
+        att[["ServiceDate", "ServiceName"]]
+        .drop_duplicates()
+        .sort_values(["ServiceDate", "ServiceName"])
+    )
+
+    if not service_list.empty:
+        options = [
+            f"{r.ServiceDate} — {r.ServiceName}"
+            for r in service_list.itertuples(index=False)
+        ]
+        sel_service = st.sidebar.selectbox(
+            "Select service to delete",
+            ["--"] + options,
+            index=0,
+            help="This will remove ALL rows that match the selected date + service.",
+        )
+        confirm = st.sidebar.checkbox("⚠️ Confirm delete", value=False, key="confirm_del_service")
+
+        if sel_service != "--" and confirm and st.sidebar.button("Delete selected service"):
+            sdate, sname = sel_service.split(" — ", 1)
+            before = len(att)
+            att = att[
+                ~((att["ServiceDate"] == sdate) & (att["ServiceName"] == sname))
+            ].reset_index(drop=True)
+            save_attendance(att)
+            st.sidebar.success(f"Deleted {before - len(att)} rows for {sdate} — {sname}")
+            time.sleep(0.1)
+            st.rerun()
+    else:
+        st.sidebar.info("No services found to delete.")
+
+# ============================== FOOTER ===============================
+st.caption(
+    "Data is stored in Google Sheets. Tabs: 'attendance' and 'members'. "
+    "Share the Sheet with your service account as Editor."
+)
