@@ -1,9 +1,9 @@
-
 import io
 import time
 import pandas as pd
 import streamlit as st
 import altair as alt
+from datetime import datetime, date
 
 # ---------------------- CONFIG ----------------------
 st.set_page_config(page_title="Church Attendance", layout="wide")
@@ -34,7 +34,7 @@ st.title("🙏 Church Attendance Register")
 # ---------------- Sidebar: Service + Admin ---------------
 with st.sidebar:
     st.header("Service")
-    svc_date = st.date_input("Service date")
+    svc_date = st.date_input("Service date", value=date.today())
     svc_name = st.text_input("Service name", placeholder="e.g., Sunday 1st Service")
 
     st.markdown("---")
@@ -56,43 +56,57 @@ with st.sidebar:
 st.subheader("Add attendee")
 col1, col2, col3 = st.columns([3,1,3])
 with col1:
-    attendee = st.text_input("Attendee name*", placeholder="Full name").strip()
+    attendee_first = st.text_input("First name", placeholder="First name").strip()
 with col2:
-    household = st.text_input("Household size", value="1")
+    attendee_last = st.text_input("Last name", placeholder="Last name").strip()
 with col3:
-    notes = st.text_input("Notes (optional)")
+    notes = st.text_input("Notes (e.g., Title, comments)")
 
+household_str = st.text_input("Household size", value="1")
 btn_add = st.button("Add")
 if btn_add:
-    if not attendee:
-        st.warning("Please enter attendee name.")
-    elif not svc_name or not svc_date:
+    if not attendee_first or not attendee_last:
+        st.warning("Please enter both first and last name.")
+    elif not svc_date or not (svc_name or "").strip():
         st.warning("Please set **Service date** and **Service name** in the sidebar.")
     else:
+        full_name = f"{attendee_first} {attendee_last}".strip()
         row = {
-            "Timestamp": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "ServiceDate": pd.to_datetime(svc_date).date().isoformat(),
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "ServiceDate": svc_date.isoformat(),
             "ServiceName": svc_name,
-            "Attendee": attendee,
-            "Household": as_int(household, 1),
+            "Attendee": full_name,
+            "Household": as_int(household_str, 1),
             "Notes": notes
         }
         st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([row])], ignore_index=True)
-        st.success(f"Added: {attendee} ({row['Household']})")
-        time.sleep(0.2)
-        st.experimental_rerun()
+        st.success(f"Added: {full_name} (Household {row['Household']})")
+        time.sleep(0.1)
+        st.rerun()
 
 # ---------------- Summary Cards --------------------------
 st.markdown("### Summary")
 df = st.session_state.df.copy()
 
-if df.empty:
-    st.info("No records yet. Add your first attendee above.")
-else:
-    svc_filter = (df["ServiceDate"] == (pd.to_datetime(svc_date).date().isoformat() if svc_date else "")) & \
-                 (df["ServiceName"] == svc_name if svc_name else "")
-    df_today = df[svc_filter]
+# ---- Ensure correct types for filtering (fixes TypeError) ----
+# Coerce ServiceDate to date ISO strings (yyyy-mm-dd)
+if "ServiceDate" in df.columns:
+    # Try to parse; if already strings, this is no-op
+    try:
+        parsed = pd.to_datetime(df["ServiceDate"], errors="coerce")
+        df["ServiceDate"] = parsed.dt.date.astype(str)
+    except Exception:
+        df["ServiceDate"] = df["ServiceDate"].astype(str)
 
+selected_date = svc_date.isoformat() if isinstance(svc_date, date) else str(svc_date)
+name_pred = (df["ServiceName"] == svc_name) if (svc_name or "").strip() else True
+date_pred = (df["ServiceDate"] == selected_date) if selected_date else True
+svc_filter = date_pred & name_pred
+df_today = df[svc_filter].copy()
+
+if df.empty:
+    st.info("No records yet. Add your first attendee above or import a CSV.")
+else:
     total_entries = len(df_today)
     total_people = df_today["Household"].astype(int).sum() if not df_today.empty else 0
 
@@ -116,13 +130,17 @@ if df.empty:
 else:
     # Clean types
     dfc = df.copy()
-    dfc["ServiceDate"] = pd.to_datetime(dfc["ServiceDate"])
-    dfc["Household"] = dfc["Household"].astype(int)
+    dfc["ServiceDate"] = pd.to_datetime(dfc["ServiceDate"], errors="coerce")
+    dfc = dfc.dropna(subset=["ServiceDate"])
+    dfc["Household"] = pd.to_numeric(dfc["Household"], errors="coerce").fillna(1).astype(int)
 
     # Filters for dashboard
     fc1, fc2, fc3 = st.columns([2,2,2])
     with fc1:
-        min_d, max_d = dfc["ServiceDate"].min(), dfc["ServiceDate"].max()
+        if not dfc.empty:
+            min_d, max_d = dfc["ServiceDate"].min().date(), dfc["ServiceDate"].max().date()
+        else:
+            min_d, max_d = date.today(), date.today()
         dr = st.date_input("Date range", value=(min_d, max_d))
     with fc2:
         svc_opts = ["All"] + sorted(dfc["ServiceName"].dropna().unique().tolist())
@@ -132,8 +150,8 @@ else:
 
     # Apply filters
     if isinstance(dr, tuple) and len(dr) == 2:
-        dfc = dfc[(dfc["ServiceDate"] >= pd.to_datetime(dr[0])) &
-                  (dfc["ServiceDate"] <= pd.to_datetime(dr[1]))]
+        dfc = dfc[(dfc["ServiceDate"].dt.date >= dr[0]) &
+                  (dfc["ServiceDate"].dt.date <= dr[1])]
     if svc_pick != "All":
         dfc = dfc[dfc["ServiceName"] == svc_pick]
 
@@ -146,32 +164,36 @@ else:
     k4.metric("Avg household per entry", f"{avg_house:.2f}")
 
     # ---- Chart 1: People over time (line + rolling) ----
-    daily = (dfc.groupby("ServiceDate", as_index=False)
-                .agg(people=("Household","sum"), entries=("Attendee","count")))
+    daily = (dfc.groupby(dfc["ServiceDate"].dt.date, as_index=False)
+                .agg(people=("Household","sum"), entries=("Attendee","count"))
+                .rename(columns={"ServiceDate":"Date"}))
     if not daily.empty:
+        daily["Date"] = pd.to_datetime(daily["Date"])
         daily["roll"] = daily["people"].rolling(roll).mean()
         line1 = alt.Chart(daily).mark_line().encode(
-            x=alt.X("ServiceDate:T", title="Date"),
+            x=alt.X("Date:T", title="Date"),
             y=alt.Y("people:Q", title="People")
         )
         line2 = alt.Chart(daily).mark_line(strokeDash=[6,3]).encode(
-            x="ServiceDate:T",
+            x="Date:T",
             y="roll:Q",
-            tooltip=["ServiceDate:T","people:Q","roll:Q"]
+            tooltip=["Date:T","people:Q","roll:Q"]
         )
         st.altair_chart((line1 + line2).properties(height=320).interactive(), use_container_width=True)
     else:
         st.info("No points in selected range.")
 
     # ---- Chart 2: Service mix (stacked area by service) ----
-    svc_mix = (dfc.groupby(["ServiceDate","ServiceName"], as_index=False)
-                  .agg(people=("Household","sum")))
+    svc_mix = (dfc.groupby([dfc["ServiceDate"].dt.date,"ServiceName"], as_index=False)
+                  .agg(people=("Household","sum"))
+                  .rename(columns={"ServiceDate":"Date"}))
     if not svc_mix.empty:
+        svc_mix["Date"] = pd.to_datetime(svc_mix["Date"])
         area = alt.Chart(svc_mix).mark_area().encode(
-            x="ServiceDate:T",
+            x="Date:T",
             y="people:Q",
             color=alt.Color("ServiceName:N", title="Service"),
-            tooltip=["ServiceDate:T","ServiceName:N","people:Q"]
+            tooltip=["Date:T","ServiceName:N","people:Q"]
         )
         st.altair_chart(area.properties(height=260).interactive(), use_container_width=True)
 
@@ -203,7 +225,7 @@ else:
 
     log = df.copy()
     if f_date:
-        log = log[log["ServiceDate"] == pd.to_datetime(f_date).date().isoformat()]
+        log = log[log["ServiceDate"] == f_date.isoformat()]
     if f_svc:
         log = log[log["ServiceName"].str.contains(f_svc, case=False, na=False)]
     if f_name:
@@ -227,22 +249,21 @@ else:
                 st.session_state.df.loc[idx, "Household"] = as_int(new_house, 1)
                 st.session_state.df.loc[idx, "Notes"] = new_notes
                 st.success("Row updated.")
-                time.sleep(0.2)
-                st.experimental_rerun()
+                time.sleep(0.1)
+                st.rerun()
 
         if st.button("Delete row"):
             st.session_state.df = st.session_state.df.drop(index=idx).reset_index(drop=True)
             st.success("Row deleted.")
-            time.sleep(0.2)
-            st.experimental_rerun()
+            time.sleep(0.1)
+            st.rerun()
 
 # ---------------- Export / Import ------------------------
 st.markdown("### Data Export / Import")
 colx, coly = st.columns([1,1])
 with colx:
-    if st.button("Download CSV"):
-        csv = st.session_state.df.to_csv(index=False).encode("utf-8")
-        st.download_button("Save attendance.csv", data=csv, file_name="attendance.csv", mime="text/csv", use_container_width=True)
+    csv = st.session_state.df.to_csv(index=False).encode("utf-8")
+    st.download_button("Save attendance.csv", data=csv, file_name="attendance.csv", mime="text/csv", use_container_width=True)
 
 with coly:
     if st.session_state.is_admin:
@@ -251,13 +272,14 @@ with coly:
             try:
                 newdf = pd.read_csv(up)
                 required = ["Timestamp","ServiceDate","ServiceName","Attendee","Household","Notes"]
-                if not all(c in newdf.columns for c in required):
-                    st.error(f"CSV must include columns: {', '.join(required)}")
+                missing = [c for c in required if c not in newdf.columns]
+                if missing:
+                    st.error(f"CSV must include columns: {', '.join(required)}. Missing: {', '.join(missing)}")
                 else:
                     st.session_state.df = newdf[required].copy()
                     st.success("Imported CSV and replaced current data.")
-                    time.sleep(0.2)
-                    st.experimental_rerun()
+                    time.sleep(0.1)
+                    st.rerun()
             except Exception as e:
                 st.error(f"Import failed: {e}")
 
