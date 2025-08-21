@@ -125,7 +125,7 @@ def save_members(df: pd.DataFrame) -> None:
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
 
-st.title("🙏 Church Attendance Tracker  —  with Member Autocomplete")
+st.title("Mansfield PIWC Attendance")
 
 with st.sidebar:
     st.header("Service")
