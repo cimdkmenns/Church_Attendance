@@ -186,7 +186,11 @@ abs_df = load_absences()
 # ===================== ADD ATTENDEE (WITH ROSTER) =====================
 st.subheader("Add attendee")
 
-mode = st.radio("Choose input mode", ["From roster", "Manual entry"], horizontal=True)
+mode = st.radio(
+    "Choose input mode",
+    ["From roster", "Batch from roster", "Manual entry"],
+    horizontal=True
+)
 
 col1, col2, col3 = st.columns([3, 3, 1])
 notes_in = st.text_input("Notes (e.g., Title, visitor, etc.)", value="")
@@ -225,7 +229,73 @@ if mode == "From roster":
             time.sleep(0.1)
             st.rerun()
 
-else:  # Manual entry
+elif mode == "Batch from roster":
+    # Build roster of active members
+    active_mem = mem[mem["Active"] == 1].copy()
+    roster = (
+        active_mem["Attendee"]
+        .dropna().astype(str).str.strip()
+        .sort_values().unique().tolist()
+    )
+
+    # Optional quick filter
+    q = st.text_input("Filter roster (optional)", placeholder="Type to filter names…")
+    if q:
+        roster = [n for n in roster if q.lower() in n.lower()]
+
+    if not roster:
+        st.info("No matching names. Clear the filter or add members to the roster.")
+    else:
+        # Editable table: select multiple; set per-person household & notes
+        base = pd.DataFrame({
+            "Attendee": roster,
+            "Household": 1,
+            "Notes": "",
+            "Select": False,
+        })
+
+        edited = st.data_editor(
+            base,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            column_config={
+                "Select": st.column_config.CheckboxColumn("Select"),
+                "Attendee": st.column_config.TextColumn("Attendee", disabled=True),
+                "Household": st.column_config.NumberColumn("Household", min_value=1, step=1),
+                "Notes": st.column_config.TextColumn("Notes (optional)"),
+            },
+        )
+
+        chosen = edited[edited["Select"]].copy()
+
+        # Batch add button
+        add_label = f"Add {len(chosen)} selected attendee(s)" if len(chosen) else "Add selected attendee(s)"
+        if st.button(add_label, use_container_width=True):
+            if chosen.empty:
+                st.warning("Select at least one person in the list.")
+            else:
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                def to_int(x):
+                    try:
+                        v = int(float(x));  return v if v > 0 else 1
+                    except:
+                        return 1
+                new_rows = [{
+                    "Timestamp":  ts,
+                    "ServiceDate": svc_date.isoformat(),
+                    "ServiceName": svc_name.strip(),
+                    "Attendee":    r["Attendee"],
+                    "Household":   to_int(r["Household"]),
+                    "Notes":       str(r.get("Notes", "")).strip(),
+                } for _, r in chosen.iterrows()]
+
+                att = pd.concat([att, pd.DataFrame(new_rows)], ignore_index=True)
+                save_attendance(att)
+                st.success(f"Checked in {len(new_rows)} attendee(s).")
+                time.sleep(0.1); st.rerun()
+
+elif mode == "Manual entry":
     first = col1.text_input("First name").strip()
     last  = col2.text_input("Last name").strip()
     hh    = col3.number_input("Household size", min_value=1, value=1, step=1)
