@@ -19,6 +19,9 @@ SHEET_NAME = st.secrets.get("SHEET_NAME", "Church Attendance Tracker")
 ATTENDANCE_WS = "attendance"
 MEMBERS_WS    = "members"
 
+ABSENCES_WS   = "absences"
+ABSENCE_COLS  = ["Timestamp", "ServiceDate", "ServiceName", "Attendee", "Note"]
+
 ATTENDANCE_COLS = ["Timestamp", "ServiceDate", "ServiceName", "Attendee", "Household", "Notes"]
 MEMBER_COLS     = ["FirstName", "LastName", "Attendee", "Notes", "Active"]  # Active: 1/0
 
@@ -121,6 +124,34 @@ def save_members(df: pd.DataFrame) -> None:
     set_with_dataframe(ws, clean, include_index=False, include_column_header=True)
     load_members.clear()
 
+def ensure_absence_cols(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        df = pd.DataFrame(columns=ABSENCE_COLS)
+    for c in ABSENCE_COLS:
+        if c not in df.columns:
+            df[c] = ""
+    return df[ABSENCE_COLS].copy()
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_absences() -> pd.DataFrame:
+    gc = get_gspread_client()
+    sh = open_or_create_spreadsheet(gc)
+    ws = open_or_create_ws(sh, ABSENCES_WS, ABSENCE_COLS)
+    df = get_as_dataframe(ws, evaluate_formulas=True, header=0, dtype=str)
+    if df is None or df.empty or ("Attendee" not in df.columns):
+        df = pd.DataFrame(columns=ABSENCE_COLS)
+    df = df.dropna(how="all")
+    return ensure_absence_cols(df)
+
+def save_absences(df: pd.DataFrame) -> None:
+    gc = get_gspread_client()
+    sh = open_or_create_spreadsheet(gc)
+    ws = open_or_create_ws(sh, ABSENCES_WS, ABSENCE_COLS)
+    clean = ensure_absence_cols(df)
+    ws.clear()
+    set_with_dataframe(ws, clean, include_index=False, include_column_header=True)
+    load_absences.clear()
+    
 # ============================ UI STATE ==========================
 if "is_admin" not in st.session_state:
     st.session_state.is_admin = False
@@ -150,6 +181,7 @@ with st.sidebar:
 # Load persistent data
 att = load_attendance()
 mem = load_members()
+abs_df = load_absences()
 
 # ===================== ADD ATTENDEE (WITH ROSTER) =====================
 st.subheader("Add attendee")
@@ -262,6 +294,79 @@ else:
     )
     st.dataframe(summary, use_container_width=True)
 
+# ====================== ABSENTEES & REASONS (ADMIN) ======================
+st.markdown("### Absentees & Reasons (Admin)")
+
+if not st.session_state.is_admin:
+    st.info("Unlock Admin mode in the sidebar to manage absentees.")
+else:
+    # Active roster (Attendee names) vs attendees for the selected service/date
+    active_attendees = (
+        mem[mem["Active"] == 1]["Attendee"]
+        .dropna().astype(str).str.strip().unique().tolist()
+    )
+
+    present_today = (
+        att_today["Attendee"].dropna().astype(str).str.strip().unique().tolist()
+        if not att_today.empty else []
+    )
+
+    missing = sorted(set(active_attendees) - set(present_today))
+
+    cA, cB = st.columns([2, 1])
+    with cA:
+        st.write(
+            f"**Service:** {svc_name.strip() or '(no name)'}  |  "
+            f"**Date:** {svc_date.isoformat()}  |  "
+            f"**Active roster:** {len(active_attendees)}  |  "
+            f"**Present:** {len(present_today)}  |  "
+            f"**Absent:** {len(missing)}"
+        )
+
+    if st.button("Find absentees for this service"):
+        if not missing:
+            st.success("No absentees — everyone on the active roster attended 🎉")
+        else:
+            st.info("Enter a note for any absent member (e.g., traveling, unwell, work). Leave blank to skip.")
+            notes_inputs = {}
+            for name in missing:
+                key = f"abs_note__{svc_date.isoformat()}__{svc_name.strip()}__{name}"
+                notes_inputs[name] = st.text_input(f"Reason / note — {name}", key=key)
+
+            if st.button("Save absence notes"):
+                current_abs = load_absences()
+                new_rows = []
+                ts_now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                for name, note in notes_inputs.items():
+                    note = (note or "").strip()
+                    if note:
+                        new_rows.append({
+                            "Timestamp":  ts_now,
+                            "ServiceDate": svc_date.isoformat(),
+                            "ServiceName": svc_name.strip(),
+                            "Attendee":    name,
+                            "Note":        note,
+                        })
+                if new_rows:
+                    updated = pd.concat([current_abs, pd.DataFrame(new_rows)], ignore_index=True)
+                    save_absences(updated)
+                    st.success(f"Saved {len(new_rows)} absence note(s).")
+                    time.sleep(0.1); st.rerun()
+                else:
+                    st.warning("No notes entered — nothing to save.")
+
+    # Show saved notes for this service/date
+    svc_abs = abs_df[
+        (abs_df["ServiceDate"] == svc_date.isoformat()) &
+        ((abs_df["ServiceName"] == svc_name.strip()) if svc_name.strip() else True)
+    ].copy()
+
+    if not svc_abs.empty:
+        st.markdown("#### Notes saved for this service")
+        st.dataframe(svc_abs.sort_values("Attendee"), use_container_width=True)
+    else:
+        st.caption("No saved absence notes for the selected service yet.")
+        
 # =========================== DASHBOARD ===========================
 st.markdown("## 📊 Dashboard")
 if att.empty:
@@ -420,6 +525,20 @@ with c3:
             time.sleep(0.1); st.rerun()
         except Exception as e:
             st.error(f"Roster import failed: {e}")
+
+with st.expander("Export absences (optional)"):
+    abs_all = load_absences()
+    if abs_all.empty:
+        st.caption("No absences saved yet.")
+    else:
+        csv_abs = abs_all.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            "Download absences CSV",
+            data=csv_abs,
+            file_name="absences_export.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 # ===================== ADMIN: DELETE SERVICE RECORDS (SIDEBAR) =====================
 if st.session_state.is_admin and not att.empty:
