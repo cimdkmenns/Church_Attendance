@@ -473,73 +473,71 @@ else:
             st.success("Row deleted.")
             time.sleep(0.1); st.rerun()
 
-# ======================= IMPORT / EXPORT =========================
-st.markdown("### Data Export / Import")
+# ======================= IMPORT / EXPORT (SIDEBAR) =========================
+with st.sidebar:
+    if st.session_state.is_admin:
+        st.markdown("### 📂 Data Export / Import")
 
-c1, c2, c3 = st.columns([1.2, 1.2, 1.2])
+        csv_att = ensure_attendance_cols(att).to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download attendance CSV", data=csv_att,
+                           file_name="attendance_export.csv", mime="text/csv")
 
-with c1:
-    csv_att = ensure_attendance_cols(att).to_csv(index=False).encode("utf-8")
-    st.download_button("Download attendance CSV", data=csv_att,
-                       file_name="attendance_export.csv", mime="text/csv",
-                       use_container_width=True)
+        st.markdown("**Import attendance CSV**")
+        up = st.file_uploader("Upload attendance CSV",
+                              type=["csv"], key="up_att", label_visibility="collapsed")
+        if up is not None:
+            try:
+                newdf = pd.read_csv(up)
+                missing = [c for c in ATTENDANCE_COLS if c not in newdf.columns]
+                if missing:
+                    st.error(f"CSV must include: {', '.join(ATTENDANCE_COLS)}. Missing: {', '.join(missing)}")
+                else:
+                    save_attendance(newdf[ATTENDANCE_COLS].copy())
+                    st.success("Imported attendance and saved to Google Sheets.")
+                    time.sleep(0.1); st.rerun()
+            except Exception as e:
+                st.error(f"Import failed: {e}")
 
-with c2:
-    st.markdown("**Import attendance CSV**")
-    up = st.file_uploader("Upload (columns: Timestamp, ServiceDate, ServiceName, Attendee, Household, Notes)",
-                          type=["csv"], key="up_att")
-    if st.session_state.is_admin and up is not None:
-        try:
-            newdf = pd.read_csv(up)
-            missing = [c for c in ATTENDANCE_COLS if c not in newdf.columns]
-            if missing:
-                st.error(f"CSV must include: {', '.join(ATTENDANCE_COLS)}. Missing: {', '.join(missing)}")
-            else:
-                save_attendance(newdf[ATTENDANCE_COLS].copy())
-                st.success("Imported attendance and saved to Google Sheets.")
+        st.markdown("---")
+        st.markdown("**Members roster**")
+
+        csv_mem = ensure_member_cols(mem).to_csv(index=False).encode("utf-8")
+        st.download_button("⬇️ Download roster CSV", data=csv_mem,
+                           file_name="members_export.csv", mime="text/csv")
+
+        upm = st.file_uploader("Upload roster CSV",
+                               type=["csv"], key="up_mem", label_visibility="collapsed")
+        if upm is not None:
+            try:
+                mdf = pd.read_csv(upm, dtype=str)
+                # Flexible: accept Attendee or First/Last; normalize
+                if "Attendee" in mdf.columns and ("FirstName" not in mdf.columns or "LastName" not in mdf.columns):
+                    split = mdf["Attendee"].fillna("").astype(str).str.strip().str.split(" ", n=1, expand=True)
+                    mdf["FirstName"] = split[0].fillna("")
+                    mdf["LastName"]  = split[1].fillna("")
+                mdf["Active"] = pd.to_numeric(mdf.get("Active", 1), errors="coerce").fillna(1).astype(int)
+                mdf["Notes"]  = mdf.get("Notes", "")
+                mdf = ensure_member_cols(mdf)
+                save_members(mdf)
+                st.success("Roster imported.")
                 time.sleep(0.1); st.rerun()
-        except Exception as e:
-            st.error(f"Import failed: {e}")
+            except Exception as e:
+                st.error(f"Roster import failed: {e}")
 
-with c3:
-    st.markdown("**Members roster**")
-    csv_mem = ensure_member_cols(mem).to_csv(index=False).encode("utf-8")
-    st.download_button("Download roster CSV", data=csv_mem,
-                       file_name="members_export.csv", mime="text/csv",
-                       use_container_width=True)
-    upm = st.file_uploader("Import roster CSV (FirstName, LastName, Notes, Active)",
-                           type=["csv"], key="up_mem")
-    if st.session_state.is_admin and upm is not None:
-        try:
-            mdf = pd.read_csv(upm, dtype=str)
-            # Flexible: accept Attendee or First/Last; normalize
-            if "Attendee" in mdf.columns and ("FirstName" not in mdf.columns or "LastName" not in mdf.columns):
-                split = mdf["Attendee"].fillna("").astype(str).str.strip().str.split(" ", n=1, expand=True)
-                mdf["FirstName"] = split[0].fillna("")
-                mdf["LastName"]  = split[1].fillna("")
-            mdf["Active"] = pd.to_numeric(mdf.get("Active", 1), errors="coerce").fillna(1).astype(int)
-            mdf["Notes"]  = mdf.get("Notes", "")
-            mdf = ensure_member_cols(mdf)
-            save_members(mdf)
-            st.success("Roster imported.")
-            time.sleep(0.1); st.rerun()
-        except Exception as e:
-            st.error(f"Roster import failed: {e}")
-
-with st.expander("Export absences (optional)"):
-    abs_all = load_absences()
-    if abs_all.empty:
-        st.caption("No absences saved yet.")
-    else:
-        csv_abs = abs_all.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            "Download absences CSV",
-            data=csv_abs,
-            file_name="absences_export.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
+        st.markdown("---")
+        with st.expander("Export absences (optional)"):
+            abs_all = load_absences()
+            if abs_all.empty:
+                st.caption("No absences saved yet.")
+            else:
+                csv_abs = abs_all.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇️ Download absences CSV",
+                    data=csv_abs,
+                    file_name="absences_export.csv",
+                    mime="text/csv",
+                )
+                
 # ===================== ADMIN: DELETE SERVICE RECORDS (SIDEBAR) =====================
 if st.session_state.is_admin and not att.empty:
     st.sidebar.markdown("---")
