@@ -214,72 +214,97 @@ st.subheader("Add attendee")
 mode = st.radio(
     "Choose input mode",
     ["From roster", "Batch from roster", "Manual entry"],
-    horizontal=True
+    horizontal=True,
+    key="mode_radio"
 )
 
 col1, col2, col3 = st.columns([3, 3, 1])
-notes_in = st.text_input("Notes (e.g., Title, visitor, etc.)", value="")
+notes_in = st.text_input("Notes (e.g., Title, visitor, etc.)", value="", key="notes_single")
+
+if mode == "From roster":
+    # Use active members first; the selectbox is searchable when the list is long
+    active_mem = mem[mem["Active"] == 1].copy()
+    options = (
+        active_mem["Attendee"]
+        .dropna().astype(str).str.strip()
+        .sort_values().unique().tolist()
+    )
+    selected = col1.selectbox(
+        "Search member (type to filter)",
+        options,
+        index=None,
+        placeholder="Start typing a name…",
+        key="single_select_member"
+    )
+    hh_single = col3.number_input("Household size", min_value=1, value=1, step=1, key="hh_single")
+
+    # Quick view or add-if-missing
+    with col2:
+        st.write("")  # spacer
+        if selected:
+            mrow = active_mem[active_mem["Attendee"] == selected].iloc[0]
+            st.success(f"Selected: {mrow['FirstName']} {mrow['LastName']}")
+        else:
+            st.info("Tip: If a person isn’t listed, switch to **Manual entry** and you can add them to the roster.")
+
+    if st.button("Add attendee", key="btn_add_single"):
+        if not selected:
+            st.warning("Pick a member from the roster first.")
+        else:
+            new = {
+                "Timestamp":  datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "ServiceDate": svc_date.isoformat(),
+                "ServiceName": svc_name.strip(),
+                "Attendee":    selected,
+                "Household":   int(hh_single),
+                "Notes":       notes_in,
+            }
+            att = pd.concat([att, pd.DataFrame([new])], ignore_index=True)
+            save_attendance(att)
+            st.success(f"Checked in: {selected} (Household {int(hh_single)})")
+            time.sleep(0.1)
+            st.rerun()
 
 elif mode == "Batch from roster":
     # Build roster of active members
     active_mem = mem[mem["Active"] == 1].copy()
-    roster = (
+    roster_all = (
         active_mem["Attendee"]
         .dropna().astype(str).str.strip()
         .sort_values().unique().tolist()
     )
 
-    # Who is already present today for this service?
+    # Already-present for this service/date → pre-select them
     present_today = (
-        att_today["Attendee"].dropna().astype(str).str.strip().unique().tolist()
-        if not att_today.empty else []
+        att[(att["ServiceDate"] == svc_date.isoformat()) &
+            (att["ServiceName"] == svc_name.strip())]["Attendee"]
+          .dropna().astype(str).str.strip().unique().tolist()
     )
-    present_set = set(present_today)
+    pre_selected = set(present_today)
 
-    # Pull latest household/notes (today) for display
-    if not att_today.empty:
-        today_house = (
-            att_today.assign(Household=pd.to_numeric(att_today["Household"], errors="coerce").fillna(1).astype(int))
-                     .groupby("Attendee", as_index=True)["Household"].last()
-        )
-        today_notes = (
-            att_today.groupby("Attendee", as_index=True)["Notes"].last()
-        )
-    else:
-        today_house = pd.Series(dtype="int")
-        today_notes = pd.Series(dtype="object")
-
-    # Optional quick filter of names
-    q = st.text_input("Filter roster (optional)", placeholder="Type to filter names…")
-    if q:
-        roster = [n for n in roster if q.lower() in n.lower()]
-
-    # Let you view only those not yet checked in
-    show_only_missing = st.checkbox("Show only not yet checked-in", value=False)
-    if show_only_missing:
-        roster = [n for n in roster if n not in present_set]
+    # Optional quick filter
+    q = st.text_input("Filter roster (optional)", placeholder="Type to filter names…", key="batch_filter")
+    roster = [n for n in roster_all if q.lower() in n.lower()] if q else roster_all
 
     if not roster:
         st.info("No matching names. Clear the filter or add members to the roster.")
     else:
-        # Build the table. Pre-check anyone already present (when not filtering to missing).
+        # Build the editable table with pre-selection of those already present
         base = pd.DataFrame({
             "Attendee": roster,
+            "Household": 1,
+            "Notes": "",
+            "Select": [name in pre_selected for name in roster],
         })
-        base["Household"] = (
-            base["Attendee"].map(today_house).fillna(1).astype(int)
-            if not today_house.empty else 1
-        )
-        base["Notes"] = base["Attendee"].map(today_notes).fillna("") if not today_notes.empty else ""
-        base["Select"] = base["Attendee"].isin(present_set) if not show_only_missing else False
 
         edited = st.data_editor(
             base,
             use_container_width=True,
             hide_index=True,
             num_rows="fixed",
+            key="batch_editor",
             column_config={
-                "Select": st.column_config.CheckboxColumn("Select"),
+                "Select": st.column_config.CheckboxColumn("Present?"),
                 "Attendee": st.column_config.TextColumn("Attendee", disabled=True),
                 "Household": st.column_config.NumberColumn("Household", min_value=1, step=1),
                 "Notes": st.column_config.TextColumn("Notes (optional)"),
@@ -288,50 +313,57 @@ elif mode == "Batch from roster":
 
         chosen = edited[edited["Select"]].copy()
 
-        # Button: add only those not already present (avoid duplicates)
-        add_label = f"Add {len(chosen)} selected attendee(s)" if len(chosen) else "Add selected attendee(s)"
-        if st.button(add_label, use_container_width=True, key="batch_add_btn"):
-            if chosen.empty:
-                st.warning("Select at least one person in the list.")
+        # Add/update attendees in one go
+        add_label = f"Save {len(chosen)} present attendee(s)" if len(chosen) else "Save selected attendee(s)"
+        if st.button(add_label, use_container_width=True, key="btn_add_batch"):
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            def to_int(x):
+                try:
+                    v = int(float(x));  return v if v > 0 else 1
+                except Exception:
+                    return 1
+
+            # Remove any existing rows for this service/date for the selected people (to avoid duplicates),
+            # then re-add what is in the editor now.
+            if not chosen.empty:
+                chosen_names = chosen["Attendee"].astype(str).str.strip().tolist()
+                is_same_service = (
+                    (att["ServiceDate"] == svc_date.isoformat()) &
+                    (att["ServiceName"] == svc_name.strip()) &
+                    (att["Attendee"].isin(chosen_names))
+                )
+                att = att.loc[~is_same_service].reset_index(drop=True)
+
+                new_rows = [{
+                    "Timestamp":  ts,
+                    "ServiceDate": svc_date.isoformat(),
+                    "ServiceName": svc_name.strip(),
+                    "Attendee":    r["Attendee"],
+                    "Household":   to_int(r["Household"]),
+                    "Notes":       str(r.get("Notes", "")).strip(),
+                } for _, r in chosen.iterrows()]
+
+                att = pd.concat([att, pd.DataFrame(new_rows)], ignore_index=True)
+                save_attendance(att)
+                st.success(f"Saved {len(new_rows)} attendee(s) for {svc_name} on {svc_date.isoformat()}.")
+                time.sleep(0.1); st.rerun()
             else:
-                # Skip names already present; only insert new ones
-                to_insert = chosen[~chosen["Attendee"].isin(present_set)].copy()
-
-                if to_insert.empty:
-                    st.info("Everyone you selected is already checked in for this service.")
-                else:
-                    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-                    def to_int(x):
-                        try:
-                            v = int(float(x));  return v if v > 0 else 1
-                        except:
-                            return 1
-
-                    new_rows = [{
-                        "Timestamp":  ts,
-                        "ServiceDate": svc_date.isoformat(),
-                        "ServiceName": svc_name.strip(),
-                        "Attendee":    r["Attendee"],
-                        "Household":   to_int(r["Household"]),
-                        "Notes":       str(r.get("Notes", "")).strip(),
-                    } for _, r in to_insert.iterrows()]
-
-                    att = pd.concat([att, pd.DataFrame(new_rows)], ignore_index=True)
-                    save_attendance(att)
-                    st.success(f"Checked in {len(new_rows)} new attendee(s).")
-                    time.sleep(0.1); st.rerun()
-
+                st.warning("Select at least one person in the list.")
 
 elif mode == "Manual entry":
-    first = col1.text_input("First name").strip()
-    last  = col2.text_input("Last name").strip()
-    hh    = col3.number_input("Household size", min_value=1, value=1, step=1)
+    first = col1.text_input("First name", key="manual_first").strip()
+    last  = col2.text_input("Last name", key="manual_last").strip()
+    hh    = col3.number_input("Household size", min_value=1, value=1, step=1, key="manual_hh")
 
-    add_to_roster = st.checkbox("Also add to roster", value=True,
-                                help="If checked, this person is saved to the Members list for future autocomplete.")
+    add_to_roster = st.checkbox(
+        "Also add to roster",
+        value=True,
+        help="If checked, this person is saved to the Members list for future autocomplete.",
+        key="manual_add_to_roster"
+    )
 
-    if st.button("Add attendee"):
+    if st.button("Add attendee", key="btn_add_manual"):
         if not first or not last:
             st.warning("Please enter both first and last name.")
         elif not svc_name.strip():
@@ -365,7 +397,7 @@ elif mode == "Manual entry":
             st.success(f"Checked in: {full} (Household {int(hh)})")
             time.sleep(0.1)
             st.rerun()
-
+            
 # ============================ SUMMARY =============================
 st.markdown("### Summary")
 att = ensure_attendance_cols(att)
