@@ -187,44 +187,6 @@ with st.sidebar:
     else:
         svc_name = st.text_input("Service name", value="Sunday 1st Service", key="svc_name_input").strip()
 
-    st.markdown("---")
-
-    # ---------- Admin ----------
-    st.header("Admin")
-    if "is_admin" not in st.session_state:
-        st.session_state.is_admin = False
-
-    if not st.session_state.is_admin:
-        pin = st.text_input("Enter Admin PIN", type="password", key="admin_pin")
-        if st.button("Unlock", key="admin_unlock_btn"):
-            if pin == ADMIN_PIN:
-                st.session_state.is_admin = True
-                st.success("Admin unlocked.")
-            else:
-                st.error("Incorrect PIN.")
-    else:
-        st.success("Admin mode ON")
-        if st.button("Lock admin", key="admin_lock_btn"):
-            st.session_state.is_admin = False
-    st.markdown("---")
-
-    # ---------- Admin ----------
-    st.header("Admin")
-    if "is_admin" not in st.session_state:
-        st.session_state.is_admin = False
-
-    if not st.session_state.is_admin:
-        pin = st.text_input("Enter Admin PIN", type="password", key="admin_pin")
-        if st.button("Unlock"):
-            if pin == ADMIN_PIN:
-                st.session_state.is_admin = True
-                st.success("Admin unlocked.")
-            else:
-                st.error("Incorrect PIN.")
-    else:
-        st.success("Admin mode ON")
-        if st.button("Lock admin"):
-            st.session_state.is_admin = False
 
     st.markdown("---")
     st.header("Admin")
