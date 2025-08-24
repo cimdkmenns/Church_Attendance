@@ -162,11 +162,9 @@ with st.sidebar:
     # ---------- Service ----------
     st.header("Service")
 
-    # Pick the date first
-    svc_date = st.date_input("Service date", value=date.today())
+    svc_date = st.date_input("Service date", value=date.today(), key="svc_date")
 
-    # Look up existing services for that date
-    _att_for_sidebar = load_attendance()  # cached call; fast
+    _att_for_sidebar = load_attendance()  # cached; fast
     existing_services = sorted(
         _att_for_sidebar.loc[
             _att_for_sidebar["ServiceDate"] == svc_date.isoformat(),
@@ -179,16 +177,35 @@ with st.sidebar:
             "Service name",
             options=["<New service>"] + existing_services,
             index=1 if len(existing_services) == 1 else 0,
-            help="Select an existing service for this date, or choose <New service> to add another."
+            help="Select an existing service for this date, or choose <New service> to add another.",
+            key="svc_name_choice"
         )
         if choice == "<New service>":
-            svc_name = st.text_input("Enter new service name", value="Sunday 1st Service").strip()
+            svc_name = st.text_input("Enter new service name", value="Sunday 1st Service", key="svc_name_new").strip()
         else:
             svc_name = choice.strip()
     else:
-        # No services yet on this date — type a new one
-        svc_name = st.text_input("Service name", value="Sunday 1st Service").strip()
+        svc_name = st.text_input("Service name", value="Sunday 1st Service", key="svc_name_input").strip()
 
+    st.markdown("---")
+
+    # ---------- Admin ----------
+    st.header("Admin")
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
+
+    if not st.session_state.is_admin:
+        pin = st.text_input("Enter Admin PIN", type="password", key="admin_pin")
+        if st.button("Unlock", key="admin_unlock_btn"):
+            if pin == ADMIN_PIN:
+                st.session_state.is_admin = True
+                st.success("Admin unlocked.")
+            else:
+                st.error("Incorrect PIN.")
+    else:
+        st.success("Admin mode ON")
+        if st.button("Lock admin", key="admin_lock_btn"):
+            st.session_state.is_admin = False
     st.markdown("---")
 
     # ---------- Admin ----------
