@@ -159,34 +159,55 @@ if "is_admin" not in st.session_state:
 st.title("Mansfield PIWC Attendance")
 
 with st.sidebar:
-st.header("Service")
+    # ---------- Service ----------
+    st.header("Service")
 
-# Pick the date first
-svc_date = st.date_input("Service date", value=date.today())
+    # Pick the date first
+    svc_date = st.date_input("Service date", value=date.today())
 
-# Look up existing services for that date (uses cached load_attendance)
-_att_for_sidebar = load_attendance()
-existing_services = sorted(
-    _att_for_sidebar.loc[
-        _att_for_sidebar["ServiceDate"] == svc_date.isoformat(), "ServiceName"
-    ].dropna().unique().tolist()
-)
-
-if existing_services:
-    # If at least one service already exists for this date, offer a dropdown
-    choice = st.selectbox(
-        "Service name",
-        options=["<New service>"] + existing_services,
-        index=1 if len(existing_services) == 1 else 0,
-        help="Select an existing service for this date, or choose <New service> to add another."
+    # Look up existing services for that date
+    _att_for_sidebar = load_attendance()  # cached call; fast
+    existing_services = sorted(
+        _att_for_sidebar.loc[
+            _att_for_sidebar["ServiceDate"] == svc_date.isoformat(),
+            "ServiceName"
+        ].dropna().unique().tolist()
     )
-    if choice == "<New service>":
-        svc_name = st.text_input("Enter new service name", value="").strip()
+
+    if existing_services:
+        choice = st.selectbox(
+            "Service name",
+            options=["<New service>"] + existing_services,
+            index=1 if len(existing_services) == 1 else 0,
+            help="Select an existing service for this date, or choose <New service> to add another."
+        )
+        if choice == "<New service>":
+            svc_name = st.text_input("Enter new service name", value="Sunday 1st Service").strip()
+        else:
+            svc_name = choice.strip()
     else:
-        svc_name = choice.strip()
-else:
-    # No services yet on this date — type a new one
-    svc_name = st.text_input("Service name", value="Sunday 1st Service").strip()
+        # No services yet on this date — type a new one
+        svc_name = st.text_input("Service name", value="Sunday 1st Service").strip()
+
+    st.markdown("---")
+
+    # ---------- Admin ----------
+    st.header("Admin")
+    if "is_admin" not in st.session_state:
+        st.session_state.is_admin = False
+
+    if not st.session_state.is_admin:
+        pin = st.text_input("Enter Admin PIN", type="password", key="admin_pin")
+        if st.button("Unlock"):
+            if pin == ADMIN_PIN:
+                st.session_state.is_admin = True
+                st.success("Admin unlocked.")
+            else:
+                st.error("Incorrect PIN.")
+    else:
+        st.success("Admin mode ON")
+        if st.button("Lock admin"):
+            st.session_state.is_admin = False
 
     st.markdown("---")
     st.header("Admin")
